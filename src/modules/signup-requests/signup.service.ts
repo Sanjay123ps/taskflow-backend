@@ -21,8 +21,32 @@ const requestInclude = { reviewedBy: true, profile: true } as const;
 export async function submitSignupRequest(input: SubmitSignupRequestInput) {
   await verifyCaptcha(input.captchaToken);
 
+  const normalizedEmail = input.email.toLowerCase().trim();
   const existingProfile = await prisma.profile.findUnique({ where: { email: input.email } });
+
   if (existingProfile) {
+    // A profile row already exists for this email. Most of the time that
+    // really does mean "already registered" — but if it's a STAFF profile
+    // that's still PENDING and never got its email verified, the person
+    // simply lost the OTP screen (closed the tab, browser restart, etc.)
+    // before finishing signup. There's no other way back into that flow
+    // (see SignupVerifyOtp.tsx), so treat resubmitting the same email here
+    // as "resume my signup" instead of permanently locking the account out.
+    if (existingProfile.role === 'STAFF' && existingProfile.status === 'PENDING' && !existingProfile.emailVerifiedAt) {
+      const existingRequest = await prisma.staffSignupRequest.findFirst({
+        where: { profileId: existingProfile.id, status: 'PENDING' },
+        include: requestInclude,
+      });
+      if (existingRequest) {
+        const otp = await otpService.issueOtp(normalizedEmail, 'SIGNUP_VERIFY');
+        return { request: toSignupRequestDTO(existingRequest), otp };
+      }
+    }
+
+    if (existingProfile.status === 'PENDING' && existingProfile.emailVerifiedAt) {
+      throw new ConflictError('This email is already verified and awaiting admin approval.');
+    }
+
     throw new ConflictError('An account with this email already exists.');
   }
 
