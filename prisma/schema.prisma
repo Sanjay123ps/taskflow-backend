@@ -1,0 +1,420 @@
+// TaskFlow — Prisma schema
+// Database: Supabase PostgreSQL
+// Auth identity (email/password, verification, reset) lives in Supabase Auth
+// (auth.users). Profile.authUserId is the FK reference to that table's id.
+// We never store or hash passwords ourselves.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ------------------------------------------------------------------
+// Enums
+// ------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  STAFF
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  INCOMPLETE
+}
+
+// Staff presence/availability indicator shown on the Staff Dashboard and
+// in Admin -> Staff Management. ACTIVE/BUSY are set manually by the staff
+// member; OFFLINE is only ever set by the backend (on logout, or lazily
+// flipped after an inactivity window — see profile.service.ts).
+enum PresenceStatus {
+  ACTIVE
+  BUSY
+  OFFLINE
+}
+
+enum ActivityAction {
+  ADMIN_LOGIN
+  ADMIN_LOGOUT
+  STAFF_LOGIN
+  STAFF_LOGOUT
+  SIGNUP_REQUEST_SUBMITTED
+  SIGNUP_REQUEST_APPROVED
+  SIGNUP_REQUEST_REJECTED
+  SIGNUP_EMAIL_VERIFIED
+  ADMIN_REQUEST_SUBMITTED
+  ADMIN_REQUEST_APPROVED
+  ADMIN_REQUEST_REJECTED
+  STAFF_CREATED
+  STAFF_UPDATED
+  STAFF_DEACTIVATED
+  STAFF_REACTIVATED
+  TASK_CREATED
+  TASK_ASSIGNED
+  TASK_UPDATED
+  TASK_COMPLETED
+  TASK_DELETED
+  PROFILE_UPDATED
+  SETTINGS_UPDATED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+}
+
+// Purpose an OTP verification code was issued for. Kept generic so the same
+// table/service backs both the Staff Signup email-verification step and the
+// Forgot Password flow (and any future Admin OTP flows).
+enum OtpPurpose {
+  SIGNUP_VERIFY
+  ADMIN_SIGNUP_VERIFY
+  PASSWORD_RESET
+}
+
+// ------------------------------------------------------------------
+// Models
+// ------------------------------------------------------------------
+
+model Profile {
+  id              String     @id @default(uuid())
+  authUserId      String     @unique
+  fullName        String
+  email           String     @unique
+  employeeId      String?    @unique
+  phone           String?
+  department      String?
+  designation     String?
+  profileImageUrl String?
+  role            UserRole
+  status          UserStatus @default(PENDING)
+  // Set once a Staff signup's 4-digit OTP has been verified (see
+  // otp.service.ts). Null for Admin accounts, which are never created via
+  // the self-serve OTP signup flow. Staff login is blocked until this is set.
+  emailVerifiedAt DateTime?
+  joiningDate     DateTime?
+  // Presence/availability (Staff only in practice). Defaults to OFFLINE;
+  // flipped to ACTIVE on login, set explicitly via PATCH /profile/status,
+  // and reset to OFFLINE on logout or after the configured inactivity
+  // window (see profile.service.ts).
+  presenceStatus  PresenceStatus @default(OFFLINE)
+  lastActiveAt    DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  tasksAssigned Task[] @relation("AssignedTasks")
+  tasksCreated  Task[] @relation("CreatedTasks")
+
+  activityLogs  ActivityLog[]
+  notifications Notification[]
+  sessions      Session[]
+
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+
+  signupRequestSelf      StaffSignupRequest?     @relation("SignupProfile")
+  signupRequestsReviewed StaffSignupRequest[]    @relation("SignupReviewedBy")
+  adminRequestsMade      AdminCreationRequest[]  @relation("AdminRequestedBy")
+  adminRequestsReviewed  AdminCreationRequest[]  @relation("AdminReviewedBy")
+  adminSignupRequestSelf      AdminSignupRequest?  @relation("AdminSignupProfile")
+  adminSignupRequestsReviewed AdminSignupRequest[] @relation("AdminSignupReviewedBy")
+
+  taskComments TaskComment[]
+
+  attendanceRecords Attendance[]
+
+  @@index([role])
+  @@index([status])
+  @@index([presenceStatus])
+  @@map("profiles")
+}
+
+model Task {
+  id             String       @id @default(uuid())
+  title          String
+  description    String
+  assignedToId   String?
+  assignedTo     Profile?     @relation("AssignedTasks", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById    String
+  createdBy      Profile      @relation("CreatedTasks", fields: [createdById], references: [id], onDelete: Restrict)
+  priority       TaskPriority @default(MEDIUM)
+  status         TaskStatus   @default(PENDING)
+  dueDate        DateTime
+  dueTime        String
+  attachmentUrl  String?
+  attachmentPath String?
+  notes          String?
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  comments TaskComment[]
+
+  @@index([assignedToId])
+  @@index([createdById])
+  @@index([status])
+  @@index([priority])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    Profile  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+// One row per staff member per calendar day. Created on their first login
+// of the day (see attendance.service.ts -> recordLogin) and updated on
+// logout; never written to directly from the frontend. `date` is a plain
+// DATE column (no time) so the (staffId, date) unique constraint reliably
+// prevents duplicate rows for the same staff member on the same day.
+model Attendance {
+  id                  String           @id @default(uuid())
+  staffId             String
+  staff               Profile          @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  date                DateTime         @db.Date
+  loginTime           DateTime?
+  logoutTime          DateTime?
+  totalWorkingMinutes Int?
+  status              AttendanceStatus @default(INCOMPLETE)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@unique([staffId, date])
+  @@index([staffId])
+  @@index([date])
+  @@index([status])
+  @@map("attendance")
+}
+
+model ActivityLog {
+  id          String         @id @default(uuid())
+  userId      String
+  user        Profile        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action      ActivityAction
+  entityType  String?
+  entityId    String?
+  description String
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime       @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// Staff signup: the Supabase Auth user + a PENDING Profile are created at
+// submission time (so the password is handed straight to Supabase Auth and
+// never touches our database); the profile is gated to ACTIVE only on
+// approval. See auth.service.ts / signup.service.ts for the flow.
+model StaffSignupRequest {
+  id              String        @id @default(uuid())
+  profileId       String?       @unique
+  profile         Profile?      @relation("SignupProfile", fields: [profileId], references: [id], onDelete: SetNull)
+  fullName        String
+  email           String
+  phone           String?
+  status          RequestStatus @default(PENDING)
+  reviewedById    String?
+  reviewedBy      Profile?      @relation("SignupReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([status])
+  @@index([email])
+  @@map("staff_signup_requests")
+}
+
+// Admin creation: no password is collected up front. On approval the
+// backend uses Supabase Auth's invite-by-email flow so the new admin sets
+// their own password.
+model AdminCreationRequest {
+  id              String        @id @default(uuid())
+  requestedById   String
+  requestedBy     Profile       @relation("AdminRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  fullName        String
+  email           String
+  status          RequestStatus @default(PENDING)
+  reviewedById    String?
+  reviewedBy      Profile?      @relation("AdminReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([status])
+  @@map("admin_creation_requests")
+}
+
+// Public admin signup requests. Email OTP verification proves inbox ownership;
+// approval by an existing admin is still required before the profile becomes ACTIVE.
+model AdminSignupRequest {
+  id              String         @id @default(uuid())
+  profileId       String?        @unique
+  profile         Profile?       @relation("AdminSignupProfile", fields: [profileId], references: [id], onDelete: SetNull)
+  fullName        String
+  email           String
+  status          RequestStatus  @default(PENDING)
+  emailVerifiedAt DateTime?
+  reviewedById    String?
+  reviewedBy      Profile?       @relation("AdminSignupReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([status])
+  @@index([email])
+  @@map("admin_signup_requests")
+}
+
+model Notification {
+  id         String   @id @default(uuid())
+  userId     String
+  user       Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String
+  title      String
+  message    String
+  entityType String?
+  entityId   String?
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     Profile  @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   Profile  @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  taskId     String?
+  message    String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@map("messages")
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@map("system_settings")
+}
+
+// Backend-issued refresh-token sessions (opaque token, hashed at rest).
+// Supabase Auth is only used to verify email+password at login time and to
+// manage the account lifecycle (invite / reset) — session/token issuance
+// for this API is handled here so "active sessions" can be listed/revoked.
+model Session {
+  id               String    @id @default(uuid())
+  userId           String
+  user             Profile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipAddress        String?
+  createdAt        DateTime  @default(now())
+  lastActiveAt     DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// Auto-incrementing counter used to generate collision-free Employee IDs
+// (EMP001, EMP002, ...) via a single atomic UPDATE ... RETURNING, so
+// concurrent approvals never race on the same number.
+model EmployeeIdCounter {
+  id       Int @id @default(1)
+  lastSeq  Int @default(0)
+
+  @@map("employee_id_counter")
+}
+
+// Real, DB-backed 4-digit OTP codes for both the Staff Signup email
+// verification step and the Forgot Password flow. Only the SHA-256 hash of
+// the code is stored. SMTP is not wired up yet (see otp.service.ts) — the
+// code is logged server-side / returned in non-production responses so the
+// UI flow can be exercised end-to-end; the verification logic itself is real.
+model OtpVerification {
+  id       String     @id @default(uuid())
+  email    String
+  purpose  OtpPurpose
+  codeHash String
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5)
+
+  verified   Boolean   @default(false)
+  verifiedAt DateTime?
+
+  // Set once verified for PASSWORD_RESET, so the Create New Password step
+  // doesn't require re-entering the OTP. Single-use, hashed at rest.
+  resetTokenHash      String?   @unique
+  resetTokenExpiresAt DateTime?
+  consumedAt          DateTime?
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email, purpose])
+  @@map("otp_verifications")
+}
