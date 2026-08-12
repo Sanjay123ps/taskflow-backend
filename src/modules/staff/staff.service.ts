@@ -98,6 +98,26 @@ export async function updateStaff(id: string, input: UpdateStaffInput, updatedBy
   const existing = await prisma.profile.findFirst({ where: { id, role: 'STAFF' } });
   if (!existing) throw new NotFoundError('Staff member not found');
 
+  const emailChanged = input.email !== undefined && input.email !== existing.email;
+
+  if (emailChanged) {
+    const conflict = await prisma.profile.findUnique({ where: { email: input.email } });
+    if (conflict && conflict.id !== id) {
+      throw new ConflictError('A user with this email already exists.');
+    }
+
+    // Sync to Supabase Auth *before* writing the Profile row — Auth is the
+    // source of truth for login, so if this fails we must not let the
+    // Profile's email drift out of sync with what the user actually signs
+    // in with.
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(existing.authUserId, {
+      email: input.email,
+    });
+    if (error) {
+      throw new ConflictError(error.message || 'Could not update the login email for this account.');
+    }
+  }
+
   const profile = await prisma.profile.update({
     where: { id },
     data: {

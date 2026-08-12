@@ -27,8 +27,8 @@ import {
 const router = Router();
 
 router.post('/login', authRateLimiter, validate(loginSchema), loginHandler);
-router.post('/refresh', refreshHandler);
-router.post('/logout', logoutHandler);
+router.post('/refresh', authRateLimiter, refreshHandler);
+router.post('/logout', authRateLimiter, logoutHandler);
 router.post('/change-password', requireAuth, validate(changePasswordSchema), changePasswordHandler);
 router.get('/me', requireAuth, meHandler);
 router.post(

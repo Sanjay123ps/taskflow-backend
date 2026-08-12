@@ -21,7 +21,8 @@ const requestInclude = { reviewedBy: true, profile: true } as const;
 export async function submitSignupRequest(input: SubmitSignupRequestInput) {
   await verifyCaptcha(input.captchaToken);
 
-  const normalizedEmail = input.email.toLowerCase().trim();
+  // input.email is already lowercased/trimmed by emailSchema at the
+  // validation layer, so every lookup and write below uses one canonical form.
   const existingProfile = await prisma.profile.findUnique({ where: { email: input.email } });
 
   if (existingProfile) {
@@ -38,7 +39,7 @@ export async function submitSignupRequest(input: SubmitSignupRequestInput) {
         include: requestInclude,
       });
       if (existingRequest) {
-        const otp = await otpService.issueOtp(normalizedEmail, 'SIGNUP_VERIFY');
+        const otp = await otpService.issueOtp(input.email, 'SIGNUP_VERIFY');
         return { request: toSignupRequestDTO(existingRequest), otp };
       }
     }
@@ -119,7 +120,7 @@ export async function verifySignupOtp(input: VerifySignupOtpInput) {
   const { otpId } = await otpService.verifyOtp(input.email, 'SIGNUP_VERIFY', input.code);
   await otpService.consumeOtp(otpId);
 
-  const profile = await prisma.profile.findUnique({ where: { email: input.email.toLowerCase().trim() } });
+  const profile = await prisma.profile.findUnique({ where: { email: input.email } });
   if (!profile) {
     throw new BadRequestError('No pending signup found for this email.');
   }

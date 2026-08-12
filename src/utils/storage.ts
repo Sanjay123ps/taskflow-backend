@@ -9,6 +9,19 @@ export interface UploadedFileMeta {
 }
 
 /**
+ * Derives a safe file extension from a user-supplied filename. Only
+ * alphanumeric extensions of reasonable length are trusted (matches the
+ * shape of every real extension we expect: jpg, png, pdf, docx, ...);
+ * anything else (no extension, an unexpectedly long "extension" from a
+ * dotless filename, path separators, etc.) falls back to 'bin' rather than
+ * being concatenated as-is into the Supabase Storage object path.
+ */
+function sanitizeExtension(originalName: string): string {
+  const candidate = originalName.split('.').pop() ?? '';
+  return /^[a-zA-Z0-9]{1,10}$/.test(candidate) ? candidate.toLowerCase() : 'bin';
+}
+
+/**
  * Uploads a buffer to the given Supabase Storage bucket under a
  * collision-free path, and returns its public URL. Buckets are expected to
  * be created (and, for private buckets, have signed-URL policies set) as
@@ -19,7 +32,7 @@ export async function uploadToBucket(
   folder: string,
   file: Express.Multer.File,
 ): Promise<UploadedFileMeta> {
-  const extension = file.originalname.split('.').pop() ?? 'bin';
+  const extension = sanitizeExtension(file.originalname);
   const path = `${folder}/${randomUUID()}.${extension}`;
 
   const { error } = await supabaseAdmin.storage.from(bucket).upload(path, file.buffer, {

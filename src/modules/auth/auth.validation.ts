@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { emailSchema } from '../../utils/validation';
 
 export const loginSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
   password: z.string().min(1, 'Password is required'),
 });
 
@@ -13,21 +14,21 @@ export const changePasswordSchema = z.object({
 export const initialAdminSetupSchema = z.object({
   setupToken: z.string().min(1),
   fullName: z.string().min(2),
-  email: z.string().email(),
+  email: emailSchema,
   password: z.string().min(8),
 });
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
 });
 
 export const verifyResetOtpSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
   code: z.string().regex(/^\d{4}$/, 'Enter the 4-digit code'),
 });
 
 export const resendResetOtpSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
 });
 
 const passwordStrengthSchema = z

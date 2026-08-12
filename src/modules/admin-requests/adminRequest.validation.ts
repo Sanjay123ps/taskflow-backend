@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { emailSchema } from '../../utils/validation';
 
 export const submitAdminRequestSchema = z.object({
   fullName: z.string().min(2),
-  email: z.string().email(),
+  email: emailSchema,
 });
 
 export const adminRequestQuerySchema = z.object({

@@ -12,6 +12,12 @@ export const accountSettingsSchema = z.object({
   email: z.string().email(),
   phone: z.string().min(5).nullable().optional(),
   profileImage: z.string().url().nullable(),
+  // Staff-only in practice (Admin has no department/designation/joining
+  // date of their own) — optional so Admin's existing calls to this same
+  // endpoint keep working unchanged.
+  department: z.string().min(1).nullable().optional(),
+  designation: z.string().min(1).nullable().optional(),
+  joiningDate: z.string().min(1).nullable().optional(),
 });
 
 export const taskSettingsSchema = z.object({

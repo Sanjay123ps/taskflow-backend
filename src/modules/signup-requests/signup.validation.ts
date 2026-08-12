@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { emailSchema } from '../../utils/validation';
 
 export const submitSignupRequestSchema = z
   .object({
     fullName: z.string().min(2),
-    email: z.string().email(),
+    email: emailSchema,
     phone: z.string().min(5).optional(),
     password: z.string().min(8, 'Password must be at least 8 characters'),
     confirmPassword: z.string().min(8),
@@ -27,12 +28,12 @@ export const rejectSignupRequestSchema = z.object({
 });
 
 export const verifySignupOtpSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
   code: z.string().regex(/^\d{4}$/, 'Enter the 4-digit code'),
 });
 
 export const resendSignupOtpSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
 });
 
 export type SubmitSignupRequestInput = z.infer<typeof submitSignupRequestSchema>;

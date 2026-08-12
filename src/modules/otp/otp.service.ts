@@ -4,13 +4,15 @@ import { prisma } from '../../config/prisma';
 import { logger } from '../../config/logger';
 import { isProd } from '../../config/env';
 import { BadRequestError, TooManyRequestsError } from '../../utils/errors';
+import { sendOtpEmail } from './otp.mailer';
 
 /**
- * Real, DB-backed 4-digit OTP codes. SMTP is not wired up yet, so instead of
- * emailing the code this simply logs it server-side; in non-production
- * environments it is also handed back in the response (`devOtp`) so the
- * frontend OTP flow can be exercised end-to-end without a mail provider.
- * Verification itself (hashing, expiry, attempt limits, single-use) is real.
+ * Real, DB-backed 4-digit OTP codes, emailed via SMTP (see `otp.mailer.ts` /
+ * `config/mailer.ts`). In non-production environments without SMTP
+ * configured, the code is instead only logged server-side and handed back
+ * in the response (`devOtp`) so the frontend OTP flow can still be
+ * exercised end-to-end without a mail provider. Verification itself
+ * (hashing, expiry, attempt limits, single-use) is real either way.
  */
 
 const OTP_LENGTH = 4;
@@ -73,10 +75,13 @@ export async function issueOtp(email: string, purpose: OtpPurpose): Promise<Issu
     },
   });
 
-  logger.info({ email: normalizedEmail, purpose }, `OTP generated (SMTP not yet integrated): ${code}`);
+  const expiresInSeconds = OTP_TTL_MS / 1000;
+
+  logger.info({ email: normalizedEmail, purpose }, isProd ? 'OTP generated' : `OTP generated: ${code}`);
+  await sendOtpEmail(normalizedEmail, code, purpose, expiresInSeconds);
 
   return {
-    expiresInSeconds: OTP_TTL_MS / 1000,
+    expiresInSeconds,
     ...(isProd ? {} : { devOtp: code }),
   };
 }

@@ -7,6 +7,7 @@ import { ConflictError, NotFoundError } from '../../utils/errors';
 import { logActivity } from '../activities/activity.service';
 import { createNotification } from '../notifications/notifications.service';
 import * as otpService from '../otp/otp.service';
+import { verifyCaptcha } from '../../utils/captcha';
 import type { AdminSignupQueryInput, SubmitAdminSignupInput } from './adminSignup.validation';
 
 // Same cap as the peer-requested path (adminRequest.service.ts) — re-checked
@@ -22,6 +23,10 @@ const requestInclude = { reviewedBy: true, profile: true } as const;
  * OTP. Existing admins are *not* notified yet — see verifyAdminSignupOtp.
  */
 export async function submitAdminSignup(input: SubmitAdminSignupInput) {
+  // Admin signup is a more sensitive path than staff signup and was missing
+  // this check entirely — mirror signup.service.ts's staff flow.
+  await verifyCaptcha(input.captchaToken);
+
   const existingProfile = await prisma.profile.findUnique({ where: { email: input.email } });
   if (existingProfile) {
     throw new ConflictError('An account with this email already exists.');

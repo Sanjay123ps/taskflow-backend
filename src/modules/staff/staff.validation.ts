@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emailSchema } from '../../utils/validation';
 
 export const staffQuerySchema = z.object({
   page: z.coerce.number().int().min(1).optional(),
@@ -14,7 +15,7 @@ export const staffIdParamSchema = z.object({
 
 export const createStaffSchema = z.object({
   name: z.string().min(2),
-  email: z.string().email(),
+  email: emailSchema,
   phone: z.string().min(5),
   department: z.string().min(1),
   designation: z.string().min(1),
@@ -25,7 +26,7 @@ export const createStaffSchema = z.object({
 export const updateStaffSchema = z
   .object({
     name: z.string().min(2).optional(),
-    email: z.string().email().optional(),
+    email: emailSchema.optional(),
     phone: z.string().min(5).optional(),
     department: z.string().min(1).optional(),
     designation: z.string().min(1).optional(),

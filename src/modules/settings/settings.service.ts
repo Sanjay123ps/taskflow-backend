@@ -1,7 +1,9 @@
 import { prisma } from '../../config/prisma';
+import { supabaseAdmin } from '../../config/supabase';
 import { hashRefreshToken } from '../../utils/tokens';
 import { toAdminProfileDTO, toStaffMemberDTO } from '../../utils/dto';
 import { logActivity } from '../activities/activity.service';
+import { ConflictError } from '../../utils/errors';
 import type { AuthUser } from '../../types/authUser';
 import type {
   AccountSettingsInput,
@@ -67,6 +69,19 @@ export function updateTaskSettings(input: TaskSettingsInput, updatedById: string
 }
 
 export async function updateAccountSettings(input: AccountSettingsInput, authUser: AuthUser) {
+  const existing = await prisma.profile.findUniqueOrThrow({ where: { id: authUser.profileId } });
+
+  // Login and forgot-password both authenticate against Supabase Auth's
+  // copy of the email, so writing a new email to Postgres without also
+  // updating Supabase would silently lock the account out under its new
+  // address. Sync first and bail out before touching Postgres if it fails.
+  if (input.email !== existing.email) {
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(existing.authUserId, { email: input.email });
+    if (error) {
+      throw new ConflictError('Could not update email. Please try again.');
+    }
+  }
+
   const profile = await prisma.profile.update({
     where: { id: authUser.profileId },
     data: {
@@ -74,6 +89,13 @@ export async function updateAccountSettings(input: AccountSettingsInput, authUse
       email: input.email,
       phone: input.phone,
       profileImageUrl: input.profileImage,
+      // Staff-only fields in practice — Admin's own calls to this endpoint
+      // simply never send them, so they're skipped rather than nulled out.
+      ...(input.department !== undefined ? { department: input.department } : {}),
+      ...(input.designation !== undefined ? { designation: input.designation } : {}),
+      ...(input.joiningDate !== undefined
+        ? { joiningDate: input.joiningDate ? new Date(input.joiningDate) : null }
+        : {}),
     },
   });
 

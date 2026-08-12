@@ -1,11 +1,13 @@
 import { z } from 'zod';
+import { emailSchema } from '../../utils/validation';
 
 export const submitAdminSignupSchema = z
   .object({
     fullName: z.string().min(2),
-    email: z.string().email(),
+    email: emailSchema,
     password: z.string().min(8, 'Password must be at least 8 characters'),
     confirmPassword: z.string().min(8),
+    captchaToken: z.string().optional(),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: 'Passwords do not match',
@@ -13,11 +15,11 @@ export const submitAdminSignupSchema = z
   });
 
 export const adminSignupEmailSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
 });
 
 export const verifyAdminSignupOtpSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
   code: z.string().regex(/^\d{4}$/, 'Code must be 4 digits'),
 });
 
