@@ -10,23 +10,14 @@ import { env } from '../../config/env';
 import type { AuthUser } from '../../types/authUser';
 import type { CreateTaskInput, TaskQueryInput, UpdateTaskInput } from './tasks.validation';
 
-const taskInclude = { assignedTo: true, createdBy: true } as const;
-
-/**
- * Lazily flips PENDING/IN_PROGRESS tasks whose due date has passed into
- * OVERDUE. Called at the top of every read path so status is always
- * accurate without needing a cron job. Cheap: a single conditional UPDATE.
- */
-async function syncOverdueTasks(): Promise<void> {
-  await prisma.task.updateMany({
-    where: {
-      status: { in: ['PENDING', 'IN_PROGRESS'] },
-      dueDate: { lt: new Date() },
-      completedAt: null,
-    },
-    data: { status: 'OVERDUE' },
-  });
-}
+// `toTaskDTO` only ever reads assignedTo.{id,fullName,employeeId,profileImageUrl}
+// and never reads `createdBy` at all (see utils/dto.ts) — the previous
+// `{ assignedTo: true, createdBy: true }` pulled the *entire* Profile row
+// for both relations on every task read, including a wholly unused
+// `createdBy` join. Trimmed to just what's used.
+export const taskInclude = {
+  assignedTo: { select: { id: true, fullName: true, employeeId: true, profileImageUrl: true } },
+} as const;
 
 function scopeToRole(where: Prisma.TaskWhereInput, authUser: AuthUser): Prisma.TaskWhereInput {
   if (authUser.role === 'STAFF') {
@@ -36,7 +27,9 @@ function scopeToRole(where: Prisma.TaskWhereInput, authUser: AuthUser): Prisma.T
 }
 
 export async function listTasks(params: TaskQueryInput, authUser: AuthUser) {
-  await syncOverdueTasks();
+  // Overdue status is kept in sync by the background job started in
+  // server.ts (see overdue.service.ts) instead of on every read here —
+  // see that file for why an inline UPDATE on a GET path was removed.
   const pagination = normalizePagination(params);
 
   let where: Prisma.TaskWhereInput = {
@@ -75,7 +68,6 @@ export async function listTasks(params: TaskQueryInput, authUser: AuthUser) {
 }
 
 export async function getTask(id: string, authUser: AuthUser) {
-  await syncOverdueTasks();
   const task = await prisma.task.findUnique({ where: { id }, include: taskInclude });
   if (!task) throw new NotFoundError('Task not found');
   if (authUser.role === 'STAFF' && task.assignedToId !== authUser.profileId) {
@@ -298,7 +290,7 @@ export async function addComment(taskId: string, message: string, authUser: Auth
 
   const comment = await prisma.taskComment.create({
     data: { taskId, authorId: authUser.profileId, message },
-    include: { author: true },
+    include: { author: { select: { fullName: true } } },
   });
 
   const notifyUserId = authUser.profileId === task.createdById ? task.assignedToId : task.createdById;
@@ -325,7 +317,7 @@ export async function listComments(taskId: string, authUser: AuthUser) {
 
   const comments = await prisma.taskComment.findMany({
     where: { taskId },
-    include: { author: true },
+    include: { author: { select: { fullName: true } } },
     orderBy: { createdAt: 'asc' },
   });
   return comments.map(toTaskCommentDTO);

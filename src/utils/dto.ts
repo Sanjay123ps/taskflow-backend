@@ -62,7 +62,10 @@ export function toStaffMemberDTO(profile: Profile, taskStats?: StaffTaskStatsInp
   };
 }
 
-export function toPresenceStatusDTO(profile: Profile) {
+// Accepts a full Profile or just the two fields it actually needs, so
+// callers that only have a trimmed/select-ed row (e.g. profile.service.ts
+// reusing requireAuth's already-loaded data) don't need a full Profile.
+export function toPresenceStatusDTO(profile: Pick<Profile, 'presenceStatus' | 'lastActiveAt'>) {
   return {
     status: profile.presenceStatus,
     lastActiveAt: profile.lastActiveAt ? profile.lastActiveAt.toISOString() : null,
@@ -73,8 +76,15 @@ export function toPresenceStatusDTO(profile: Profile) {
 // Task
 // ---------------------------------------------------------------------
 
+// assignedTo only needs to carry the fields this DTO actually reads —
+// tasks.service.ts selects exactly this subset (see taskInclude) instead
+// of the full Profile row. reports.service.ts, which does need the full
+// assignedTo/createdBy Profile for its export, still satisfies this
+// structurally since a full Profile is a superset of these fields.
+type TaskAssignee = Pick<Profile, 'id' | 'fullName' | 'employeeId' | 'profileImageUrl'>;
+
 type TaskWithRelations = Task & {
-  assignedTo: Profile | null;
+  assignedTo: TaskAssignee | null;
   createdBy?: Profile;
 };
 
@@ -104,7 +114,7 @@ export function toTaskDTO(task: TaskWithRelations) {
   };
 }
 
-export function toTaskCommentDTO(comment: TaskComment & { author: Profile }) {
+export function toTaskCommentDTO(comment: TaskComment & { author: Pick<Profile, 'fullName'> }) {
   return {
     id: comment.id,
     taskId: comment.taskId,

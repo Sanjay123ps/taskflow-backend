@@ -35,6 +35,8 @@ const STAFF_A: AuthUser = {
   status: 'ACTIVE',
   email: 'a@example.com',
   fullName: 'Staff A',
+  presenceStatus: 'ONLINE',
+  lastActiveAt: new Date('2026-08-01T09:00:00Z'),
 };
 
 const ADMIN: AuthUser = {
@@ -44,6 +46,8 @@ const ADMIN: AuthUser = {
   status: 'ACTIVE',
   email: 'admin@example.com',
   fullName: 'Admin One',
+  presenceStatus: 'OFFLINE',
+  lastActiveAt: null,
 };
 
 const TASK_ASSIGNED_TO_A = {

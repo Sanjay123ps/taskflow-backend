@@ -69,14 +69,17 @@ export function updateTaskSettings(input: TaskSettingsInput, updatedById: string
 }
 
 export async function updateAccountSettings(input: AccountSettingsInput, authUser: AuthUser) {
-  const existing = await prisma.profile.findUniqueOrThrow({ where: { id: authUser.profileId } });
-
+  // authUser.email / authUser.authUserId came from the profile row
+  // requireAuth loaded for this exact request a moment ago, so there's no
+  // need for a second `profile.findUniqueOrThrow` by the same id just to
+  // read the same two fields back.
+  //
   // Login and forgot-password both authenticate against Supabase Auth's
   // copy of the email, so writing a new email to Postgres without also
   // updating Supabase would silently lock the account out under its new
   // address. Sync first and bail out before touching Postgres if it fails.
-  if (input.email !== existing.email) {
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(existing.authUserId, { email: input.email });
+  if (input.email !== authUser.email) {
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(authUser.authUserId, { email: input.email });
     if (error) {
       throw new ConflictError('Could not update email. Please try again.');
     }

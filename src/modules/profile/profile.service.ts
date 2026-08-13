@@ -1,4 +1,4 @@
-import type { Profile } from '@prisma/client';
+import type { PresenceStatus, Profile } from '@prisma/client';
 import { prisma } from '../../config/prisma';
 import { env } from '../../config/env';
 import { toAdminProfileDTO, toPresenceStatusDTO, toStaffMemberDTO } from '../../utils/dto';
@@ -76,25 +76,44 @@ export async function uploadProfilePhoto(authUser: AuthUser, file: Express.Multe
 // attendance rows in attendance.service.ts, so no cron job is needed.
 const INACTIVITY_THRESHOLD_MS = 20 * 60 * 1000; // 20 minutes
 
-async function syncStalePresence(profile: Profile): Promise<Profile> {
+interface PresenceSnapshot {
+  id: string;
+  presenceStatus: PresenceStatus;
+  lastActiveAt: Date | null;
+}
+
+async function syncStalePresence<T extends PresenceSnapshot>(profile: T): Promise<T | PresenceSnapshot> {
   if (profile.presenceStatus === 'OFFLINE') return profile;
 
   const isStale = !profile.lastActiveAt || Date.now() - profile.lastActiveAt.getTime() > INACTIVITY_THRESHOLD_MS;
   if (!isStale) return profile;
 
-  return prisma.profile.update({ where: { id: profile.id }, data: { presenceStatus: 'OFFLINE' } });
+  return prisma.profile.update({
+    where: { id: profile.id },
+    data: { presenceStatus: 'OFFLINE' },
+    select: { id: true, presenceStatus: true, lastActiveAt: true },
+  });
 }
 
 /**
  * GET /profile/status — always derives the target from the authenticated
  * session, never from a frontend-supplied id.
+ *
+ * requireAuth already loaded this exact profile row (including
+ * presenceStatus/lastActiveAt) a moment ago for this same request, so we
+ * reuse that instead of issuing a second, otherwise-identical
+ * `profile.findUnique` by id — this endpoint now does zero DB reads in the
+ * common case (only a write when the lazy OFFLINE-sync actually fires).
  */
 export async function getMyStatus(authUser: AuthUser) {
   if (authUser.role !== 'STAFF') {
     throw new ForbiddenError('Only staff accounts have a presence status.');
   }
-  const profile = await prisma.profile.findUniqueOrThrow({ where: { id: authUser.profileId } });
-  const synced = await syncStalePresence(profile);
+  const synced = await syncStalePresence({
+    id: authUser.profileId,
+    presenceStatus: authUser.presenceStatus,
+    lastActiveAt: authUser.lastActiveAt,
+  });
   return toPresenceStatusDTO(synced);
 }
 
