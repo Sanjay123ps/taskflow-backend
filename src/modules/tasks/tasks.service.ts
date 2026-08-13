@@ -5,7 +5,7 @@ import { buildPaginatedResult, normalizePagination } from '../../utils/paginatio
 import { BadRequestError, ForbiddenError, NotFoundError } from '../../utils/errors';
 import { logActivity } from '../activities/activity.service';
 import { createNotification } from '../notifications/notifications.service';
-import { uploadTaskAttachmentFile, deleteFromBucket } from '../../utils/storage';
+import { uploadTaskAttachmentFile, deleteFromBucket, createSignedAttachmentUrl } from '../../utils/storage';
 import { env } from '../../config/env';
 import type { AuthUser } from '../../types/authUser';
 import type { CreateTaskInput, TaskQueryInput, UpdateTaskInput } from './tasks.validation';
@@ -18,6 +18,19 @@ import type { CreateTaskInput, TaskQueryInput, UpdateTaskInput } from './tasks.v
 export const taskInclude = {
   assignedTo: { select: { id: true, fullName: true, employeeId: true, profileImageUrl: true } },
 } as const;
+
+/**
+ * Wraps `toTaskDTO` and swaps in a freshly-minted signed URL for
+ * `attachmentUrl` (see storage.ts createSignedAttachmentUrl). Must only be
+ * called after the caller has already been authorized to view this task —
+ * every call site below (getTask, listTasks, createTask, updateTask,
+ * addTaskAttachment) either performs that check itself or is only
+ * reachable by an Admin.
+ */
+async function toTaskDTOWithSignedAttachment(task: Parameters<typeof toTaskDTO>[0]) {
+  const dto = toTaskDTO(task);
+  return { ...dto, attachmentUrl: await createSignedAttachmentUrl(task.attachmentPath) };
+}
 
 function scopeToRole(where: Prisma.TaskWhereInput, authUser: AuthUser): Prisma.TaskWhereInput {
   if (authUser.role === 'STAFF') {
@@ -64,7 +77,13 @@ export async function listTasks(params: TaskQueryInput, authUser: AuthUser) {
     prisma.task.count({ where }),
   ]);
 
-  return buildPaginatedResult(rows.map(toTaskDTO), total, pagination);
+  // Pagination caps this at <= 100 rows (normalizePagination, see
+  // utils/pagination.ts), and createSignedAttachmentUrl no-ops instantly
+  // for the (usual) case of no attachment, so this stays bounded — it's
+  // not the same class of unbounded fan-out the Phase 4 report caps guard
+  // against.
+  const dtos = await Promise.all(rows.map((task) => toTaskDTOWithSignedAttachment(task)));
+  return buildPaginatedResult(dtos, total, pagination);
 }
 
 export async function getTask(id: string, authUser: AuthUser) {
@@ -73,7 +92,7 @@ export async function getTask(id: string, authUser: AuthUser) {
   if (authUser.role === 'STAFF' && task.assignedToId !== authUser.profileId) {
     throw new ForbiddenError("You don't have permission to view this task.");
   }
-  return toTaskDTO(task);
+  return toTaskDTOWithSignedAttachment(task);
 }
 
 export async function createTask(
@@ -100,7 +119,10 @@ export async function createTask(
       dueDate: new Date(input.dueDate),
       dueTime: input.dueTime,
       notes: input.notes,
-      attachmentUrl: attachment?.publicUrl,
+      // No `attachmentUrl` write here on purpose (Phase 5): the bucket is
+      // private now, so there is no durable public URL to store — only
+      // the path is persisted, and a short-lived signed URL is minted at
+      // read time by toTaskDTOWithSignedAttachment. See storage.ts.
       attachmentPath: attachment?.path,
     },
     include: taskInclude,
@@ -123,7 +145,7 @@ export async function createTask(
     entityId: task.id,
   });
 
-  return toTaskDTO(task);
+  return toTaskDTOWithSignedAttachment(task);
 }
 
 const STAFF_ALLOWED_FIELDS: ReadonlyArray<keyof UpdateTaskInput> = ['status'];
@@ -212,7 +234,7 @@ export async function updateTask(id: string, input: UpdateTaskInput, authUser: A
     });
   }
 
-  return toTaskDTO(task);
+  return toTaskDTOWithSignedAttachment(task);
 }
 
 export async function addTaskAttachment(id: string, file: Express.Multer.File | undefined, authUser: AuthUser) {
@@ -235,7 +257,9 @@ export async function addTaskAttachment(id: string, file: Express.Multer.File | 
 
   const task = await prisma.task.update({
     where: { id },
-    data: { attachmentUrl: attachment.publicUrl, attachmentPath: attachment.path },
+    // See createTask above: attachmentUrl is no longer written; only the
+    // path is persisted, signed URLs are minted on read.
+    data: { attachmentPath: attachment.path },
     include: taskInclude,
   });
 
@@ -259,7 +283,7 @@ export async function addTaskAttachment(id: string, file: Express.Multer.File | 
     });
   }
 
-  return toTaskDTO(task);
+  return toTaskDTOWithSignedAttachment(task);
 }
 
 export async function deleteTask(id: string, deletedByProfileId: string) {

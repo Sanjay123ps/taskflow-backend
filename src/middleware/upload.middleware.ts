@@ -1,6 +1,8 @@
+import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import { env } from '../config/env';
 import { BadRequestError } from '../utils/errors';
+import { matchesDeclaredMimeType } from '../utils/fileSignature';
 
 const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   'image/png',
@@ -41,3 +43,24 @@ export const uploadProfileImage = multer({
     cb(null, true);
   },
 }).single('profileImage');
+
+/**
+ * Phase 6.10/Phase 5 hardening: `fileFilter` above only checks the
+ * *declared* multipart Content-Type, which the caller sets and multer
+ * never verifies against the actual bytes. Run this immediately after
+ * `uploadTaskAttachment` / `uploadProfileImage` in the route chain (once
+ * `req.file.buffer` is populated) to reject payloads whose content doesn't
+ * match what they claim to be — e.g. an HTML/SVG file renamed to `.png`
+ * with a spoofed `Content-Type: image/png`.
+ */
+export function validateFileSignature(req: Request, _res: Response, next: NextFunction) {
+  if (!req.file) {
+    next();
+    return;
+  }
+  if (!matchesDeclaredMimeType(req.file.buffer, req.file.mimetype)) {
+    next(new BadRequestError(`The uploaded file's content doesn't match its declared type (${req.file.mimetype}).`));
+    return;
+  }
+  next();
+}

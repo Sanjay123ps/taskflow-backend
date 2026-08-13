@@ -21,7 +21,20 @@ export interface ReportData {
   finalFilename?: boolean;
   columns: ReportColumn[];
   rows: Record<string, string | number>[];
+  // Set when the underlying query hit REPORT_ROW_CAP / EXPORT_ROW_CAP, i.e.
+  // there may be more matching rows than were exported. The route handler
+  // surfaces this via a response header so callers can detect a truncated
+  // export instead of silently assuming it's complete.
+  truncated?: boolean;
 }
+
+// Phase 4 hardening: matches the cap `listAttendanceForExport` already
+// enforces (see attendance.service.ts EXPORT_ROW_CAP). Combined with the
+// MAX_REPORT_RANGE_DAYS check in reports.validation.ts, this bounds both
+// the *time span* and the *row count* a single report request can pull
+// into Node.js memory, so a request can't exhaust memory even if a caller
+// somehow submits a huge, densely-populated range.
+const REPORT_ROW_CAP = 5000;
 
 function dateRangeWhere(field: string, dateFrom?: string, dateTo?: string): Record<string, unknown> {
   if (!dateFrom && !dateTo) return {};
@@ -45,6 +58,7 @@ export async function buildTasksReport(query: ReportQueryInput): Promise<ReportD
     where,
     include: { assignedTo: true, createdBy: true },
     orderBy: { dueDate: 'asc' },
+    take: REPORT_ROW_CAP,
   });
 
   return {
@@ -71,6 +85,7 @@ export async function buildTasksReport(query: ReportQueryInput): Promise<ReportD
       dueTime: t.dueTime,
       completedAt: t.completedAt ? t.completedAt.toISOString() : '',
     })),
+    truncated: tasks.length === REPORT_ROW_CAP,
   };
 }
 
@@ -78,6 +93,9 @@ export async function buildStaffReport(query: ReportQueryInput): Promise<ReportD
   const staff = await prisma.profile.findMany({
     where: { role: 'STAFF', status: { not: 'PENDING' }, ...(query.staffId ? { id: query.staffId } : {}) },
     orderBy: { fullName: 'asc' },
+    // Naturally bounded by headcount today, but capped defensively so this
+    // report can never grow unbounded alongside the other three.
+    take: REPORT_ROW_CAP,
   });
 
   const statsMap = await computeTaskStatsForStaffIds(staff.map((s) => s.id));
@@ -114,6 +132,7 @@ export async function buildStaffReport(query: ReportQueryInput): Promise<ReportD
         completionRate,
       };
     }),
+    truncated: staff.length === REPORT_ROW_CAP,
   };
 }
 
@@ -127,7 +146,7 @@ export async function buildActivityReport(query: ReportQueryInput): Promise<Repo
     where,
     include: { user: { select: { fullName: true, role: true } } },
     orderBy: { createdAt: 'desc' },
-    take: 5000, // hard cap so a huge unfiltered export can't exhaust memory
+    take: REPORT_ROW_CAP, // hard cap so a huge unfiltered export can't exhaust memory
   });
 
   return {
@@ -146,6 +165,7 @@ export async function buildActivityReport(query: ReportQueryInput): Promise<Repo
       action: r.action,
       description: r.description,
     })),
+    truncated: rows.length === REPORT_ROW_CAP,
   };
 }
 
@@ -219,5 +239,9 @@ export async function buildAttendanceReport(query: ReportQueryInput, authUser: A
       workingHours: formatWorkingHours(r.totalWorkingMinutes),
       status: r.status,
     })),
+    // listAttendanceForExport applies its own EXPORT_ROW_CAP (see
+    // attendance.service.ts); mirror that cap value here for the truncation
+    // signal since it's a different constant in a different module.
+    truncated: records.length === 5000,
   };
 }

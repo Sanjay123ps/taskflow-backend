@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth.middleware';
 import { requireAdmin } from '../../middleware/role.middleware';
 import { validate } from '../../middleware/validation.middleware';
-import { uploadTaskAttachment } from '../../middleware/upload.middleware';
+import { uploadTaskAttachment, validateFileSignature } from '../../middleware/upload.middleware';
+import { uploadRateLimiter } from '../../middleware/rateLimit.middleware';
 import {
   addCommentHandler,
   addTaskAttachmentHandler,
@@ -21,9 +22,24 @@ router.use(requireAuth);
 
 router.get('/', validate(taskQuerySchema, 'query'), listTasksHandler);
 router.get('/:id', validate(taskIdParamSchema, 'params'), getTaskHandler);
-router.post('/', requireAdmin, uploadTaskAttachment, validate(createTaskSchema), createTaskHandler);
+router.post(
+  '/',
+  requireAdmin,
+  uploadRateLimiter,
+  uploadTaskAttachment,
+  validateFileSignature,
+  validate(createTaskSchema),
+  createTaskHandler,
+);
 router.patch('/:id', validate(taskIdParamSchema, 'params'), validate(updateTaskSchema), updateTaskHandler);
-router.post('/:id/attachment', validate(taskIdParamSchema, 'params'), uploadTaskAttachment, addTaskAttachmentHandler);
+router.post(
+  '/:id/attachment',
+  uploadRateLimiter,
+  validate(taskIdParamSchema, 'params'),
+  uploadTaskAttachment,
+  validateFileSignature,
+  addTaskAttachmentHandler,
+);
 router.delete('/:id', requireAdmin, validate(taskIdParamSchema, 'params'), deleteTaskHandler);
 
 router.get('/:id/comments', validate(taskIdParamSchema, 'params'), listCommentsHandler);

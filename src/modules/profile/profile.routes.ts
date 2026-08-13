@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth.middleware';
-import { uploadProfileImage } from '../../middleware/upload.middleware';
+import { uploadProfileImage, validateFileSignature } from '../../middleware/upload.middleware';
+import { uploadRateLimiter } from '../../middleware/rateLimit.middleware';
 import { validate } from '../../middleware/validation.middleware';
 import {
   getMyStatusHandler,
@@ -17,7 +18,7 @@ const router = Router();
 // ownership against; req.authUser.profileId is always the target.
 router.use(requireAuth);
 
-router.post('/photo', uploadProfileImage, uploadProfilePhotoHandler);
+router.post('/photo', uploadRateLimiter, uploadProfileImage, validateFileSignature, uploadProfilePhotoHandler);
 router.delete('/photo', removeProfilePhotoHandler);
 
 // Staff presence (Active / Busy / Offline). Same "no :userId param" logic

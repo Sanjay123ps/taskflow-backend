@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { requireAuth } from '../../middleware/auth.middleware';
 import { requireAdmin } from '../../middleware/role.middleware';
+import { reportRateLimiter } from '../../middleware/rateLimit.middleware';
 import { validate } from '../../middleware/validation.middleware';
 import { toCsvBuffer, toXlsxBuffer } from '../../utils/exporters';
 import { BadRequestError, UnauthorizedError } from '../../utils/errors';
@@ -27,6 +28,13 @@ const downloadReportHandler = asyncHandler(
     const timestamp = new Date().toISOString().slice(0, 10);
     const baseFilename = report.finalFilename ? report.filename : `${report.filename}-${timestamp}`;
 
+    // Lets callers detect a capped/truncated export (see REPORT_ROW_CAP /
+    // EXPORT_ROW_CAP in reports.service.ts and attendance.service.ts)
+    // instead of silently assuming the file contains every matching row.
+    if (report.truncated) {
+      res.setHeader('X-Report-Truncated', 'true');
+    }
+
     if (req.query.format === 'csv') {
       const buffer = toCsvBuffer(report);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -43,7 +51,9 @@ const downloadReportHandler = asyncHandler(
 );
 
 const router = Router();
-router.use(requireAuth, requireAdmin);
+// requireAuth/requireAdmin must run before reportRateLimiter so its
+// per-user keyGenerator (req.authUser.profileId) has something to key on.
+router.use(requireAuth, requireAdmin, reportRateLimiter);
 
 router.get(
   '/:type',

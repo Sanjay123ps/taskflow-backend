@@ -36,3 +36,34 @@ export const otpRateLimiter = rateLimit({
   legacyHeaders: false,
   handler: (_req, res) => sendError(res, 429, 'Too many attempts. Please wait a few minutes and try again.'),
 });
+
+/**
+ * Phase 6.5: report generation is CPU/DB/memory-heavier per-request than
+ * ordinary CRUD traffic (a full query + in-memory XLSX build, see
+ * reports.service.ts), so it gets its own, much tighter budget instead of
+ * riding on generalRateLimiter's 600/15min. Keyed by user, not just IP,
+ * since admins share office IPs/VPNs in practice — see keyGenerator below.
+ */
+export const reportRateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.authUser?.profileId ?? req.ip ?? 'unknown',
+  handler: (_req, res) => sendError(res, 429, 'Too many report requests. Please wait a few minutes and try again.'),
+});
+
+/**
+ * Phase 6.5/6.10: file uploads (task attachments, profile images) are
+ * comparatively expensive (buffered in memory by multer, then written to
+ * Supabase Storage) and are a natural target for repeated-upload abuse.
+ * Scoped per-user for the same reason as reportRateLimiter above.
+ */
+export const uploadRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.authUser?.profileId ?? req.ip ?? 'unknown',
+  handler: (_req, res) => sendError(res, 429, 'Too many uploads. Please wait a few minutes and try again.'),
+});
